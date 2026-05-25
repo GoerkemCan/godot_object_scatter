@@ -15,8 +15,8 @@ class Base:
 
 
 class Verbose extends Base:
-	func _init(p_context: String).(p_context):
-		pass
+	func _init(p_context: String):
+		super(p_context)
 		
 	func debug(msg: String):
 		print(_context, ": ", msg)

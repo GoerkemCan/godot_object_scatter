@@ -1,25 +1,28 @@
-tool
+@tool
 extends EditorPlugin
 
-const Scatter3D = preload("res://addons/zylann.scatter/scatter3d.gd")
-const PaletteScene = preload("res://addons/zylann.scatter/tools/palette.tscn")
+const Scatter3D = preload("res://addons/goerk.scatter/scatter3d.gd")
+const PaletteScene = preload("res://addons/goerk.scatter/tools/palette.tscn")
 const Palette = preload("./palette.gd")
 const Util = preload("../util/util.gd")
-const Logger = preload("../util/logger.gd")
+const ScatterLogger = preload("../util/logger.gd")
 
 const ACTION_PAINT = 0
 const ACTION_ERASE = 1
 
+const FOREST_MAX_ATTEMPT_MULTIPLIER = 8
+const FOREST_RAY_PADDING = 10.0
+
 var _node : Scatter3D
 var _selected_patterns := []
 var _mouse_position := Vector2()
-var _editor_camera : Camera
+var _editor_camera : Camera3D
 var _collision_mask := 1
 var _placed_instances = []
 var _removed_instances = []
 var _disable_undo := false
 var _pattern_margin := 0.0
-var _logger = Logger.get_for(self)
+var _logger = ScatterLogger.get_for(self)
 var _current_action := -1
 var _cmd_pending_action := false
 
@@ -28,36 +31,36 @@ var _error_dialog = null
 
 
 static func get_icon(name):
-	return load("res://addons/zylann.scatter/tools/icons/icon_" + name + ".svg")
+	return load("res://addons/goerk.scatter/tools/icons/icon_" + name + ".svg")
 
 
 func _enter_tree():
 	_logger.debug("Scatter plugin Enter tree")
 	# The class is globally named but still need to register it just so the node creation dialog gets it
 	# https://github.com/godotengine/godot/issues/30048
-	add_custom_type("Scatter3D", "Spatial", Scatter3D, get_icon("scatter3d_node"))
+	add_custom_type("Scatter3D", "Node3D", Scatter3D, get_icon("scatter3d_node"))
 	
 	var base_control = get_editor_interface().get_base_control()
 	
-	_palette = PaletteScene.instance()
-	_palette.connect("patterns_selected", self, "_on_Palette_patterns_selected")
-	_palette.connect("pattern_added", self, "_on_Palette_pattern_added")
-	_palette.connect("patterns_removed", self, "_on_Palette_patterns_removed")
+	_palette = PaletteScene.instantiate()
+	_palette.patterns_selected.connect(_on_Palette_patterns_selected)
+	_palette.pattern_added.connect(_on_Palette_pattern_added)
+	_palette.patterns_removed.connect(_on_Palette_patterns_removed)
 	_palette.hide()
 	add_control_to_container(EditorPlugin.CONTAINER_SPATIAL_EDITOR_SIDE_LEFT, _palette)
 	_palette.set_preview_provider(get_editor_interface().get_resource_previewer())
 	_palette.call_deferred("setup_dialogs", base_control)
 
 	_error_dialog = AcceptDialog.new()
-	_error_dialog.rect_min_size = Vector2(300, 200)
+	_error_dialog.min_size = Vector2i(300, 200)
 	_error_dialog.hide()
-	_error_dialog.window_title = "Error"
+	_error_dialog.title = "Error"
 	base_control.add_child(_error_dialog)
 	
 
 func _exit_tree():
 	_logger.debug("Scatter plugin Exit tree")
-	edit(null)
+	_edit(null)
 	
 	remove_custom_type("Scatter3D")
 	
@@ -68,11 +71,11 @@ func _exit_tree():
 	_error_dialog = null
 
 
-func handles(obj):
+func _handles(obj):
 	return obj != null and obj is Scatter3D
 
 
-func edit(obj):
+func _edit(obj):
 	_node = obj
 	if _node:
 		var patterns = _node.get_patterns()
@@ -82,36 +85,36 @@ func edit(obj):
 		set_physics_process(false)
 
 
-func make_visible(visible):
+func _make_visible(visible):
 	_palette.set_visible(visible)
 	# TODO Workaround https://github.com/godotengine/godot/issues/6459
 	# When the user selects another node, I want the plugin to release its references.
 	if not visible:
-		edit(null)
+		_edit(null)
 
 
-func forward_spatial_gui_input(p_camera, p_event):
+func _forward_3d_gui_input(p_camera, p_event):
 	if _node == null:
-		return false
+		return EditorPlugin.AFTER_GUI_INPUT_PASS
 
-	var captured_event = false
+	var captured_event = EditorPlugin.AFTER_GUI_INPUT_PASS
 	
 	if p_event is InputEventMouseButton:
 		var mb = p_event
 		
-		if mb.button_index == BUTTON_LEFT or mb.button_index == BUTTON_RIGHT:
+		if mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_RIGHT:
 			# Need to check modifiers before capturing the event,
 			# because they are used in navigation schemes
-			if (not mb.control) and (not mb.alt):# and mb.button_index == BUTTON_LEFT:
+			if (not mb.ctrl_pressed) and (not mb.alt_pressed):# and mb.button_index == MOUSE_BUTTON_LEFT:
 				if mb.pressed:
 					match mb.button_index:
-						BUTTON_LEFT:
+						MOUSE_BUTTON_LEFT:
 							_current_action = ACTION_PAINT
-						BUTTON_RIGHT:
+						MOUSE_BUTTON_RIGHT:
 							_current_action = ACTION_ERASE
 					_cmd_pending_action = true
 				
-				captured_event = true
+				captured_event = EditorPlugin.AFTER_GUI_INPUT_STOP
 				
 				if mb.pressed == false:
 					# Just finished painting gesture
@@ -124,11 +127,11 @@ func forward_spatial_gui_input(p_camera, p_event):
 		# Need to do an extra conversion in case the editor viewport is in half-resolution mode
 		var viewport = p_camera.get_viewport()
 		var viewport_container = viewport.get_parent()
-		var screen_position = mouse_position * viewport.size / viewport_container.rect_size
+		var screen_position = mouse_position * viewport.get_visible_rect().size / viewport_container.size
 
 		_mouse_position = screen_position
 		# Trigger action only if these buttons are held
-		_cmd_pending_action = mm.button_mask & (BUTTON_MASK_LEFT | BUTTON_MASK_RIGHT)
+		_cmd_pending_action = (mm.button_mask & (MOUSE_BUTTON_MASK_LEFT | MOUSE_BUTTON_MASK_RIGHT)) != 0
 
 	_editor_camera = p_camera
 	return captured_event
@@ -153,56 +156,183 @@ func _physics_process(_unused_delta):
 
 		match _current_action:
 			ACTION_PAINT:
-				_paint(ray_origin, ray_origin + ray_dir * ray_distance)
+				_paint(ray_origin, ray_dir, ray_origin + ray_dir * ray_distance)
 			ACTION_ERASE:
 				_erase(ray_origin, ray_dir)
 
 
-func _paint(ray_origin: Vector3, ray_end: Vector3):
-	if len(_selected_patterns) == 0:
+func _paint(ray_origin: Vector3, ray_dir: Vector3, ray_end: Vector3):
+	var forest_mode := _palette.is_forest_mode_enabled()
+	var forest_patterns = _get_forest_patterns()
+	if forest_mode:
+		if len(forest_patterns) == 0:
+			return
+	elif len(_selected_patterns) == 0:
 		return
 	
-	var space_state :=  get_viewport().world.direct_space_state
-	var hit = space_state.intersect_ray(ray_origin, ray_origin + ray_end, [], _collision_mask)
+	var space_state := _node.get_world_3d().direct_space_state
+	var query := PhysicsRayQueryParameters3D.create(ray_origin, ray_end, _collision_mask)
+	var hit = space_state.intersect_ray(query)
 	
-	if hit.empty():
+	if not _is_paintable_hit(hit):
 		return
 	
-	var hit_instance_root
-	# Collider can be null if the hit is on something that has no associated node
+	if forest_mode:
+		_paint_forest(hit.position, hit.normal, ray_dir, forest_patterns)
+	else:
+		_paint_single(hit.position)
+
+
+func _is_paintable_hit(hit: Dictionary) -> bool:
+	if hit.is_empty():
+		return false
+
+	var hit_instance_root = null
 	if hit.collider != null:
 		hit_instance_root = Util.get_instance_root(hit.collider)
-	
-	if hit.collider == null or not (hit_instance_root.get_parent() is Scatter3D):
-		var pos = hit.position
-		
-		# Not accurate, you might still paint stuff too close to others,
-		# but should be good enough and cheap
-		var too_close = false
-		if len(_placed_instances) != 0:
-			var last_placed_transform := (_placed_instances[-1] as Spatial).global_transform
-			var margin := _pattern_margin + _palette.get_configured_margin()
-			if last_placed_transform.origin.distance_to(pos) < margin:
-				too_close = true
-		
-		if not too_close:
-			var instance = _create_pattern_instance()
-			instance.translation = pos
-			instance.rotate_y(rand_range(-PI, PI))
-			_node.add_child(instance)
-			instance.owner = get_editor_interface().get_edited_scene_root()
-			_placed_instances.append(instance)
+
+	return hit.collider == null or hit_instance_root == null or not (hit_instance_root.get_parent() is Scatter3D)
+
+
+func _paint_single(pos: Vector3):
+	if _is_too_close_to_placed(pos, _pattern_margin + _palette.get_configured_margin()):
+		return
+
+	var instance = _create_pattern_instance()
+	_add_painted_instance(instance, pos)
+
+
+func _paint_forest(center: Vector3, normal: Vector3, ray_dir: Vector3, patterns: Array):
+	var amount := _palette.get_forest_amount()
+	if amount <= 0:
+		return
+
+	var radius := _palette.get_forest_diameter() * 0.5
+	if radius <= 0.0:
+		return
+
+	var normal_dir := normal.normalized()
+	if normal_dir.is_zero_approx():
+		normal_dir = Vector3.UP
+	var camera_dir := ray_dir.normalized()
+	if camera_dir.is_zero_approx():
+		camera_dir = Vector3.DOWN
+
+	var tangent := normal_dir.cross(Vector3.FORWARD)
+	if tangent.is_zero_approx():
+		tangent = normal_dir.cross(Vector3.RIGHT)
+	tangent = tangent.normalized()
+	var bitangent := normal_dir.cross(tangent).normalized()
+
+	var space_state := _node.get_world_3d().direct_space_state
+	var attempts := max(amount * FOREST_MAX_ATTEMPT_MULTIPLIER, amount)
+	var placed_count := 0
+	var margin := _palette.get_configured_margin()
+	if margin <= 0.0:
+		margin = _get_even_distribution_margin(radius, amount)
+
+	if not _is_too_close_to_placed(center, margin):
+		var center_instance = patterns.pick_random().instantiate()
+		_add_painted_instance(center_instance, center)
+		placed_count += 1
+
+	for _i in range(attempts):
+		if placed_count >= amount:
+			break
+
+		var angle := randf_range(-PI, PI)
+		var distance := sqrt(randf()) * radius
+		var offset := tangent * cos(angle) * distance + bitangent * sin(angle) * distance
+		var sample_center := center + offset
+		var ray_length := max(radius + FOREST_RAY_PADDING, FOREST_RAY_PADDING)
+		var hit := _get_forest_sample_hit(space_state, sample_center, normal_dir, camera_dir, ray_length)
+		var spawn_position: Vector3 = sample_center
+		if not hit.is_empty():
+			spawn_position = hit.position
+		if _is_too_close_to_placed(spawn_position, margin):
+			continue
+
+		var instance = patterns.pick_random().instantiate()
+		_add_painted_instance(instance, spawn_position)
+		placed_count += 1
+
+
+func _get_forest_sample_hit(space_state: PhysicsDirectSpaceState3D, sample_center: Vector3, normal_dir: Vector3, camera_dir: Vector3, ray_length: float) -> Dictionary:
+	var casts := [
+		[sample_center + normal_dir * ray_length, sample_center - normal_dir * ray_length],
+		[sample_center + Vector3.UP * ray_length, sample_center - Vector3.UP * ray_length],
+		[sample_center - camera_dir * ray_length, sample_center + camera_dir * ray_length],
+	]
+
+	for cast in casts:
+		var query := PhysicsRayQueryParameters3D.create(cast[0], cast[1], _collision_mask)
+		var hit := space_state.intersect_ray(query)
+		if _is_paintable_hit(hit):
+			return hit
+
+	return {}
+
+
+func _is_too_close_to_placed(pos: Vector3, margin: float) -> bool:
+	if margin <= 0.0:
+		return false
+
+	for instance in _placed_instances:
+		if is_instance_valid(instance) and instance is Node3D:
+			if instance.global_position.distance_to(pos) < margin:
+				return true
+
+	return false
+
+
+func _add_painted_instance(instance: Node3D, pos: Vector3):
+	_node.add_child(instance)
+	instance.global_position = pos
+	instance.rotate_y(randf_range(-PI, PI))
+	instance.owner = get_editor_interface().get_edited_scene_root()
+	_placed_instances.append(instance)
+
+
+func _get_valid_patterns(patterns: Array) -> Array:
+	var valid_patterns := []
+	for pattern in patterns:
+		if pattern != null:
+			valid_patterns.append(pattern)
+	return valid_patterns
+
+
+func _get_forest_patterns() -> Array:
+	var patterns := []
+	for path in _palette.get_all_pattern_paths():
+		var pattern = load(path)
+		if pattern != null:
+			patterns.append(pattern)
+
+	if len(patterns) == 0:
+		patterns = _get_valid_patterns(_node.get_patterns())
+	if len(patterns) == 0:
+		patterns = _get_valid_patterns(_selected_patterns)
+
+	return patterns
+
+
+func _get_even_distribution_margin(radius: float, amount: int) -> float:
+	if amount <= 1:
+		return 0.0
+
+	var area := PI * radius * radius
+	return sqrt(area / amount) * 0.35
 
 
 func _erase(ray_origin: Vector3, ray_dir: Vector3):
-	var time_before := OS.get_ticks_usec()
-	var hits := VisualServer.instances_cull_ray(ray_origin, ray_dir, _node.get_world().scenario)
+	var ray_end := ray_origin + ray_dir * _editor_camera.far
+	var hits := RenderingServer.instances_cull_ray(ray_origin, ray_end, _node.get_world_3d().scenario)
 
 	if len(hits) > 0:
 		var instance = null
 		for hit_object_id in hits:
 			var hit = instance_from_id(hit_object_id)
-			if hit is Spatial:
+			if hit is Node3D:
 				instance = get_scatter_child_instance(hit, _node)
 				if instance != null:
 					break
@@ -301,7 +431,7 @@ func _set_selected_patterns(patterns):
 		_selected_patterns = patterns
 		var largest_aabb = AABB()
 		for pattern in patterns:
-			var temp = pattern.instance()
+			var temp = pattern.instantiate()
 			# TODO This causes errors because of accessing `global_transform` outside the tree... Oo
 			# See https://github.com/godotengine/godot/issues/30445
 			largest_aabb = largest_aabb.merge(Util.get_scene_aabb(temp))
@@ -311,7 +441,7 @@ func _set_selected_patterns(patterns):
 
 
 func _create_pattern_instance():
-	return _selected_patterns[floor(randf() * _selected_patterns.size())].instance()
+	return _selected_patterns.pick_random().instantiate()
 
 
 func _on_Palette_patterns_selected(pattern_paths):
@@ -371,13 +501,13 @@ func _verify_scene(fpath):
 		_show_error("The selected scene can't be added recursively")
 		return false
 	
-	# Check it inherits Spatial
+	# Check it inherits Node3D
 #	var scene_state = scene.get_state()
 #	var root_type = scene_state.get_node_type(0)
 	# Aaaah screw this
-	var scene_instance = scene.instance()
-	if not (scene_instance is Spatial):
-		_show_error(tr("The selected scene is not a Spatial, it can't be painted in a 3D scene."))
+	var scene_instance = scene.instantiate()
+	if not (scene_instance is Node3D):
+		_show_error(tr("The selected scene is not a Node3D, it can't be painted in a 3D scene."))
 		scene_instance.free()
 		return false
 	scene_instance.free()
@@ -388,5 +518,3 @@ func _verify_scene(fpath):
 func _show_error(msg):
 	_error_dialog.dialog_text = msg
 	_error_dialog.popup_centered_minsize()
-
-

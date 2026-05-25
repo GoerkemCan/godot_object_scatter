@@ -1,15 +1,15 @@
-tool
+@tool
 
-static func get_scene_aabb(node, aabb=AABB(), parent_transform=Transform()):
-	if not node.visible:
+static func get_scene_aabb(node, aabb=AABB(), parent_transform=Transform3D()):
+	if node is Node3D and not node.visible:
 		return aabb
-	var gtrans := Transform()
-	if node is Spatial:
+	var gtrans: Transform3D = parent_transform
+	if node is Node3D:
 		# We cannot use `global_transform` because the node might not be in the scene tree.
 		# If we still use it, Godot will print warnings.
 		gtrans = parent_transform * node.transform
-	if node is VisualInstance:
-		var node_aabb = gtrans.xform(node.get_aabb())
+	if node is VisualInstance3D:
+		var node_aabb = gtrans * node.get_aabb()
 		if aabb == AABB():
 			aabb = node_aabb
 		else:
@@ -21,24 +21,22 @@ static func get_scene_aabb(node, aabb=AABB(), parent_transform=Transform()):
 
 static func get_instance_root(node):
 	# TODO Could use `owner`?
-	while node != null and node.filename == "":
+	while node != null and node.scene_file_path == "":
 		node = node.get_parent()
 	return node
 
 
-static func get_node_in_parents(node, klass):
+static func get_node_in_parents(node, klass_name: String):
 	while node != null:
 		node = node.get_parent()
-		if node != null and node is klass:
+		if node != null and node.is_class(klass_name):
 			return node
 	return null
 
 
 static func is_self_or_parent_scene(fpath, node):
 	while node != null:
-		if node.filename == fpath:
+		if node.scene_file_path == fpath:
 			return true
 		node = node.get_parent()
 	return false
-
-

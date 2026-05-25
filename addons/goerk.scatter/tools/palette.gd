@@ -1,26 +1,29 @@
-tool
+@tool
 extends Control
 
-const Logger = preload("../util/logger.gd")
+const ScatterLogger = preload("../util/logger.gd")
 
 signal patterns_selected(pattern_paths)
 signal pattern_added(path)
 signal patterns_removed(path)
 
-onready var _item_list : ItemList = get_node("VBoxContainer/ItemList")
-onready var _margin_spin_box : SpinBox = get_node("VBoxContainer/MarginContainer/MarginSpinBox")
+@onready var _item_list : ItemList = get_node("VBoxContainer/ItemList")
+@onready var _margin_spin_box : SpinBox = get_node("VBoxContainer/MarginContainer/MarginSpinBox")
+@onready var _forest_mode_check_box : CheckBox = get_node("VBoxContainer/ForestModeCheckBox")
+@onready var _forest_diameter_spin_box : SpinBox = get_node("VBoxContainer/ForestDiameterContainer/ForestDiameterSpinBox")
+@onready var _forest_amount_spin_box : SpinBox = get_node("VBoxContainer/ForestAmountContainer/ForestAmountSpinBox")
 
 var _file_dialog = null
 var _preview_provider : EditorResourcePreview = null
-var _logger = Logger.get_for(self)
+var _logger = ScatterLogger.get_for(self)
 
 
 func setup_dialogs(base_control):
 	_file_dialog = FileDialog.new()
 	_file_dialog.access = FileDialog.ACCESS_RESOURCES
-	_file_dialog.mode = FileDialog.MODE_OPEN_FILE
-	_file_dialog.add_filter("*.tscn ; TSCN files")
-	_file_dialog.connect("file_selected", self, "_on_FileDialog_file_selected")
+	_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	_file_dialog.add_filter("*.tscn", "TSCN files")
+	_file_dialog.file_selected.connect(_on_FileDialog_file_selected)
 	_file_dialog.hide()
 	base_control.add_child(_file_dialog)
 
@@ -29,7 +32,7 @@ func set_preview_provider(provider : EditorResourcePreview):
 	assert(_preview_provider == null)
 	assert(provider != null)
 	_preview_provider = provider
-	_preview_provider.connect("preview_invalidated", self, "_on_EditorResourcePreview_preview_invalidated")
+	_preview_provider.preview_invalidated.connect(_on_EditorResourcePreview_preview_invalidated)
 
 
 func _exit_tree():
@@ -47,7 +50,7 @@ func load_patterns(patterns):
 
 func add_pattern(scene_path):
 	# TODO I need scene thumbnails from the editor
-	var default_icon = get_icon("PackedScene", "EditorIcons")
+	var default_icon = get_theme_icon("PackedScene", "EditorIcons")
 	var pattern_name = scene_path.get_file().get_basename()
 	var i = _item_list.get_item_count()
 	_item_list.add_item(pattern_name, default_icon)
@@ -57,7 +60,7 @@ func add_pattern(scene_path):
 		scene_path, self, "_on_EditorResourcePreview_preview_loaded", null)
 
 
-func _on_EditorResourcePreview_preview_loaded(path, texture, userdata):
+func _on_EditorResourcePreview_preview_loaded(path, texture, _thumbnail_preview, _userdata):
 	var i = find_pattern(path)
 	if i == -1:
 		return
@@ -93,6 +96,13 @@ func select_pattern(path):
 		_item_list.select(i)
 
 
+func get_all_pattern_paths():
+	var paths := []
+	for i in _item_list.get_item_count():
+		paths.append(_item_list.get_item_metadata(i))
+	return paths
+
+
 func _on_ItemList_multi_selected(_unused_index, _unused_selected):
 	var selected = []
 	for item in _item_list.get_selected_items():
@@ -102,6 +112,18 @@ func _on_ItemList_multi_selected(_unused_index, _unused_selected):
 
 func get_configured_margin() -> float:
 	return _margin_spin_box.value
+
+
+func is_forest_mode_enabled() -> bool:
+	return _forest_mode_check_box.button_pressed
+
+
+func get_forest_diameter() -> float:
+	return _forest_diameter_spin_box.value
+
+
+func get_forest_amount() -> int:
+	return int(_forest_amount_spin_box.value)
 
 
 func _on_AddButton_pressed():

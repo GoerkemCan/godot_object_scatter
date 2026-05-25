@@ -1,8 +1,8 @@
-tool
-extends Spatial
+@tool
+extends Node3D
 
 
-export(Array, PackedScene) var _scenes = []
+@export var _scenes: Array[PackedScene] = []
 
 
 func _ready():
@@ -16,12 +16,12 @@ func _remove_dangling_patterns():
 	while i < len(_scenes):
 		if _scenes[i] == null:
 			printerr(get_path(), ": Scene ", i, " failed to load")
-			_scenes.remove(i)
+			_scenes.remove_at(i)
 			changed = true
 		else:
 			i += 1
 	if changed:
-		property_list_changed_notify()
+		notify_property_list_changed()
 
 
 func get_patterns():
@@ -30,14 +30,14 @@ func get_patterns():
 
 func add_pattern(path):
 	_scenes.append(load(path))
-	property_list_changed_notify()
+	notify_property_list_changed()
 
 
 func remove_pattern(path):
 	for i in len(_scenes):
 		if _scenes[i].resource_path == path:
-			_scenes.remove(i)
-			property_list_changed_notify()
+			_scenes.remove_at(i)
+			notify_property_list_changed()
 			break
 
 
